@@ -71,30 +71,42 @@ async function viaJson(f){
     img:i.thumbnail||(i.enclosure&&i.enclosure.link&&/image|jpg|jpeg|png|webp/i.test(i.enclosure.link+(i.enclosure.type||""))?i.enclosure.link:""),
     t:Date.parse((i.pubDate||"").replace(" ","T")+"Z")||0}));
 }
-async function viaProxy(f){
-  const r=await fetch("https://api.allorigins.win/raw?url="+encodeURIComponent(f.u));
+const PROXIES=[u=>"https://api.allorigins.win/raw?url="+encodeURIComponent(u),u=>"https://corsproxy.io/?"+encodeURIComponent(u),u=>"https://api.codetabs.com/v1/proxy?quest="+encodeURIComponent(u)];
+async function viaProxy(f,p){
+  const r=await fetch(p(f.u));if(!r.ok)throw 0;
   const x=new DOMParser().parseFromString(await r.text(),"text/xml");
-  return [...x.querySelectorAll("item,entry")].map(e=>{
+  const out=[...x.querySelectorAll("item,entry")].map(e=>{
     const g=s=>{const n=e.querySelector(s);return n?n.textContent:""};
     const l=e.querySelector("link");const link=l?(l.getAttribute("href")||l.textContent):"";
     const m=e.querySelector("thumbnail,content[url],enclosure[url]");
     return {src:f.n,title:strip(g("title")),link:link.trim(),desc:strip(g("description")||g("summary")).slice(0,220),
       img:m?m.getAttribute("url"):"",t:Date.parse(g("pubDate")||g("date")||g("updated"))||0};
   });
+  if(!out.length)throw 0;return out;
 }
-async function get(f){try{return await viaJson(f)}catch(e){try{return await viaProxy(f)}catch(e2){return []}}}
-
+async function get(f){
+  try{return await viaJson(f)}catch(e){}
+  for(const p of PROXIES){try{return await viaProxy(f,p)}catch(e){}}
+  return [];
+}
+async function viaStatic(){
+  const r=await fetch("news.json?t="+Date.now(),{cache:"no-store"});if(!r.ok)throw 0;
+  const j=await r.json();return j.items||[];
+}
+function merge(arr){
+  const seen=new Set();
+  items=[...arr,...items].filter(i=>i&&i.title&&i.link).sort((a,b)=>b.t-a.t).filter(i=>{const k=i.title.toLowerCase();if(seen.has(k))return false;seen.add(k);return true}).slice(0,300);
+  try{localStorage.setItem("wn",JSON.stringify(items))}catch(e){}
+}
 async function load(){
   if(loading)return;loading=true;
   $("ref").classList.add("spin");$("status").textContent="Updating…";
   if(!items.length)$("list").innerHTML='<div class="sk"></div>'.repeat(5);
-  const res=await Promise.all(FEEDS.map(get));
-  const all=res.flat().filter(i=>i.title&&i.link);
-  const seen=new Set();
-  const fresh=all.sort((a,b)=>b.t-a.t).filter(i=>{const k=i.title.toLowerCase();if(seen.has(k))return false;seen.add(k);return true});
-  if(fresh.length){items=fresh;try{localStorage.setItem("wn",JSON.stringify(items))}catch(e){}}
-  const ok=res.filter(r=>r.length).length;
-  $("status").textContent=fresh.length?`Updated ${new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})} · ${ok}/${FEEDS.length} sources`:"Couldn't load news. Showing saved copy.";
+  let got=0;
+  const sp=viaStatic().then(a=>{got+=a.length;merge(a);render()}).catch(()=>{});
+  const lp=Promise.all(FEEDS.map(get)).then(res=>{const a=res.flat();got+=a.length;merge(a);render()});
+  await Promise.all([sp,lp]);
+  $("status").textContent=got?`Updated ${new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})} · ${items.length} stories`:"Couldn't reach any news source. Showing saved stories.";
   $("ref").classList.remove("spin");loading=false;render();
 }
 function chips(){
